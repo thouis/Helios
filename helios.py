@@ -10,6 +10,12 @@ import pylab
 
 from cg import cg
 
+def pyshowim(im, name):
+    pylab.figure()
+    pylab.imshow(im)
+    pylab.title(name)
+    pylab.colorbar()
+
 s_hstack = sparse.hstack
 s_vstack = sparse.vstack
 
@@ -108,7 +114,7 @@ psi_prime = phi_prime
 def compute_flow(im1, im2, previous_flow=None,
                  average_derivs=True,
                  flow_iters=10,
-                 alpha=10.0):
+                 alpha=1.0):
     # See Ce Liu's thesis, appendix A for notation
 
     assert im1.shape == im2.shape
@@ -134,6 +140,10 @@ def compute_flow(im1, im2, previous_flow=None,
 
     # temporal derivative
     Iz = I2 - im1
+    print "Median Abs error", np.median(np.abs(Iz))
+    pyshowim(I2, "warped")
+    pyshowim(im1, "orig")
+    pyshowim(Iz, "diff")
 
     # mask nonoverlapping areas
     Iz[np.isnan(Iz)] = 0
@@ -182,6 +192,9 @@ def compute_flow(im1, im2, previous_flow=None,
     cur_flow.v += dV.reshape(cur_flow.v.shape)
     cur_flow.u = cv2.medianBlur(cur_flow.u, 5)
     cur_flow.v = cv2.medianBlur(cur_flow.v, 5)
+    pyshowim(cur_flow.u, "u")
+    pyshowim(cur_flow.v, "v")
+    pylab.show()
     return cur_flow
 
 if __name__ == "__main__":
@@ -190,8 +203,9 @@ if __name__ == "__main__":
     im1 = im1[3249:47465, 5099:34750]
     im2 = im2[3249:47465, 5099:34750]
 
-    im1 = cv2.resize(im1, (im.shape[1] // 16, im.shape[0] // 16))
-    im2 = cv2.resize(im2, (im.shape[1] // 16, im.shape[0] // 16))
+    scaledown = 16
+    im1 = cv2.resize(im1, (im1.shape[1] // scaledown, im1.shape[0] // scaledown))
+    im2 = cv2.resize(im2, (im2.shape[1] // scaledown, im2.shape[0] // scaledown))
 
     # reduce noise
     for i in range(2):
@@ -201,21 +215,32 @@ if __name__ == "__main__":
     # equalize histogram
     clahe.clahe(im1, im1, 1.5)
     clahe.clahe(im2, im2, 1.5)
+
+    def halfstep(im):
+        im = cv2.GaussianBlur(im, (0, 0), sigmaX=1.0)
+        im = cv2.resize(im, (im.shape[1] // 2, im.shape[0] // 2))
+        return im
+
+    im1 = halfstep(im1)
+    im2 = halfstep(im2)
+
     im1 = im1.astype(np.float32) / 255
     im2 = im2.astype(np.float32) / 255
 
     # keep about 32 pixels on the shortest side
-    octaves = max(0, int(np.log2(min(*im1.shape)) - 5))
-    print "Downsampling to", octaves, "x".join(str(s * (0.5 ** octaves)) for s in im1.shape)
+    octaves = max(0, int(np.log2(min(*im1.shape)) - 3))
+    print "Downsampling %d times to" % (octaves), "x".join(str(int(s * (0.5 ** octaves))) for s in im1.shape)
     pyramid1 = scalespace(im1, octaves)
     pyramid2 = scalespace(im2, octaves)
 
     flow = compute_flow(pyramid1[octaves], pyramid2[octaves])
     for o in range(octaves):
+        alpha = 1.0 + o * 9.0 / (octaves - 1)
         print "OCTAVE", octaves - o - 1, octaves
         flow = compute_flow(pyramid1[octaves - o - 1],
                             pyramid2[octaves - o - 1],
-                            previous_flow=flow)
+                            previous_flow=flow,
+                            alpha=alpha)
 
 
 notes = '''
