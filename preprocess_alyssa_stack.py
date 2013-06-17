@@ -6,6 +6,10 @@ import fastremap
 import clahe
 
 if __name__ == "__main__":
+    out = os.path.join(sys.argv[2], os.path.basename(sys.argv[1]))
+    if os.path.exists(out):
+        sys.exit(0)
+
     im = cv2.imread(sys.argv[1], flags=cv2.CV_LOAD_IMAGE_GRAYSCALE)
     im = im[3249:47465, 5099:34750]
 
@@ -25,5 +29,4 @@ if __name__ == "__main__":
         return im
 
     im = halfstep(im)
-    cv2.imwrite(os.path.join(sys.argv[2], os.path.basename(sys.argv[1])),
-                im)
+    cv2.imwrite(out, im)
