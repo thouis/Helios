@@ -6,7 +6,7 @@ import fastremap
 import clahe
 import scipy.sparse as sparse
 import scipy.sparse.linalg as spspl
-import pylab
+import h5py
 
 from cg import cg
 
@@ -37,6 +37,12 @@ class Flow(object):
         return Flow(newshape,
                     scaleu * cv2.resize(self.u, newshape[::-1]),
                     scalev * cv2.resize(self.v, newshape[::-1]))
+
+    def save(self, filename):
+        f = h5py.File(filename, "w")
+        f.create_dataset("u", self.u.shape, dtype=self.u.dtype)[...] = self.u
+        f.create_dataset("v", self.v.shape, dtype=self.v.dtype)[...] = self.v
+        f.close()
 
 def warp(im, flow):
     ybase, xbase = np.mgrid[:im.shape[0], :im.shape[1]]
@@ -141,9 +147,6 @@ def compute_flow(im1, im2, previous_flow=None,
     # temporal derivative
     Iz = I2 - im1
     print "Median Abs error", np.median(np.abs(Iz))
-    pyshowim(I2, "warped")
-    pyshowim(im1, "orig")
-    pyshowim(Iz, "diff")
 
     # mask nonoverlapping areas
     Iz[np.isnan(Iz)] = 0
@@ -192,37 +195,39 @@ def compute_flow(im1, im2, previous_flow=None,
     cur_flow.v += dV.reshape(cur_flow.v.shape)
     cur_flow.u = cv2.medianBlur(cur_flow.u, 5)
     cur_flow.v = cv2.medianBlur(cur_flow.v, 5)
-    pyshowim(cur_flow.u, "u")
-    pyshowim(cur_flow.v, "v")
-    pylab.show()
     return cur_flow
 
 if __name__ == "__main__":
     im1 = cv2.imread(sys.argv[1], flags=cv2.CV_LOAD_IMAGE_GRAYSCALE)
     im2 = cv2.imread(sys.argv[2], flags=cv2.CV_LOAD_IMAGE_GRAYSCALE)
-    im1 = im1[3249:47465, 5099:34750]
-    im2 = im2[3249:47465, 5099:34750]
 
-    scaledown = 16
-    im1 = cv2.resize(im1, (im1.shape[1] // scaledown, im1.shape[0] // scaledown))
-    im2 = cv2.resize(im2, (im2.shape[1] // scaledown, im2.shape[0] // scaledown))
+    if False:  # we're using cached images
+        im1 = im1[3249:47465, 5099:34750]
+        im2 = im2[3249:47465, 5099:34750]
 
-    # reduce noise
-    for i in range(2):
-        im1 = cv2.medianBlur(im1, 3)
-        im2 = cv2.medianBlur(im2, 3)
+        scaledown = 16
+        im1 = cv2.resize(im1, (im1.shape[1] // scaledown, im1.shape[0] // scaledown))
+        im2 = cv2.resize(im2, (im2.shape[1] // scaledown, im2.shape[0] // scaledown))
 
-    # equalize histogram
-    clahe.clahe(im1, im1, 1.5)
-    clahe.clahe(im2, im2, 1.5)
+        # reduce noise
+        for i in range(2):
+            im1 = cv2.medianBlur(im1, 3)
+            im2 = cv2.medianBlur(im2, 3)
 
-    def halfstep(im):
-        im = cv2.GaussianBlur(im, (0, 0), sigmaX=1.0)
-        im = cv2.resize(im, (im.shape[1] // 2, im.shape[0] // 2))
-        return im
+        # equalize histogram
+        clahe.clahe(im1, im1, 1.5)
+        clahe.clahe(im2, im2, 1.5)
 
-    im1 = halfstep(im1)
-    im2 = halfstep(im2)
+        def halfstep(im):
+            im = cv2.GaussianBlur(im, (0, 0), sigmaX=1.0)
+            im = cv2.resize(im, (im.shape[1] // 2, im.shape[0] // 2))
+            return im
+
+        im1 = halfstep(im1)
+        im2 = halfstep(im2)
+
+
+    out = sys.argv[3]
 
     im1 = im1.astype(np.float32) / 255
     im2 = im2.astype(np.float32) / 255
@@ -241,6 +246,9 @@ if __name__ == "__main__":
                             pyramid2[octaves - o - 1],
                             previous_flow=flow,
                             alpha=alpha)
+
+    flow.save(out)
+
 
 
 notes = '''
