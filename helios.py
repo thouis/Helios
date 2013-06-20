@@ -40,8 +40,8 @@ class Flow(object):
 
     def save(self, filename):
         f = h5py.File(filename, "w")
-        f.create_dataset("u", self.u.shape, dtype=self.u.dtype)[...] = self.u
-        f.create_dataset("v", self.v.shape, dtype=self.v.dtype)[...] = self.v
+        f.create_dataset("u", self.u.shape, data=self.u, compression='gzip')
+        f.create_dataset("v", self.v.shape, data=self.v, compression='gzip')
         f.close()
 
 def warp(im, flow):
@@ -123,7 +123,7 @@ def compute_flow(im1, im2, previous_flow=None,
                  alpha=1.0):
     # See Ce Liu's thesis, appendix A for notation
 
-    assert im1.shape == im2.shape
+    assert im1.shape == im2.shape, "mismatch" + str(im1.shape)  + " " + str(im2.shape)
 
     # compute image derivatives
     Ix, Iy = derivs(im2)
@@ -178,8 +178,9 @@ def compute_flow(im1, im2, previous_flow=None,
         LR = diag(Psi * (Iy ** 2)) + alpha * L
         A = s_vstack((s_hstack((UL, UR)),
                       s_hstack((LL, LR)))).tocsc()
-        preA = sparse.diags(1.0 / A[range(A.shape[0]), range(A.shape[0])].A.ravel(),
-                            0)
+        di = A[range(A.shape[0]), range(A.shape[0])].A.ravel()
+        di[di == 0] = 1.0
+        preA = sparse.diags(1.0 / di, 0)
         bU = Psi * Ix * Iz + alpha * L * U
         bL = Psi * Iy * Iz + alpha * L * V
         b = - np.vstack((bU, bL))
@@ -226,6 +227,7 @@ if __name__ == "__main__":
         im1 = halfstep(im1)
         im2 = halfstep(im2)
 
+    print "Size", im1.shape, im2.shape
 
     out = sys.argv[3]
 
@@ -238,9 +240,9 @@ if __name__ == "__main__":
     pyramid1 = scalespace(im1, octaves)
     pyramid2 = scalespace(im2, octaves)
 
-    flow = compute_flow(pyramid1[octaves], pyramid2[octaves])
+    flow = compute_flow(pyramid1[octaves], pyramid2[octaves], alpha=3.0)
     for o in range(octaves):
-        alpha = 1.0 + o * 9.0 / (octaves - 1)
+        alpha = 5.0 + o * 20.0 / (octaves - 1)
         print "OCTAVE", octaves - o - 1, octaves
         flow = compute_flow(pyramid1[octaves - o - 1],
                             pyramid2[octaves - o - 1],
