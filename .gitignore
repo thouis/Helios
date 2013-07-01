@@ -1,0 +1,5 @@
+*~
+*.so
+clahe.cpp
+fastremap.c
+*.pyc
