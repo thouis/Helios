@@ -44,14 +44,50 @@ class Flow(object):
         f.create_dataset("v", self.v.shape, dtype=self.v.dtype)[...] = self.v
         f.close()
 
+    @classmethod
+    def load(cls, filename):
+        f = h5py.File(filename, "r")
+        fl = cls(f["u"].shape, f["u"][...], f["v"][...])
+        f.close()
+        return fl
+
+    def warp(self, im, repeat=False):
+        ybase, xbase = np.mgrid[:im.shape[0], :im.shape[1]]
+        if repeat:
+            return cv2.remap(im,
+                             (xbase + self.u).astype(np.float32),
+                             (ybase + self.v).astype(np.float32),
+                             cv2.INTER_CUBIC,
+                             borderMode=cv2.BORDER_REPLICATE)
+        return cv2.remap(im,
+                         (xbase + self.u).astype(np.float32),
+                         (ybase + self.v).astype(np.float32),
+                         cv2.INTER_CUBIC,
+                         borderMode=cv2.BORDER_CONSTANT,
+                         borderValue=np.nan)
+
+    def chain(self, other):
+        return Flow(self.u.shape,
+                    self.u + self.warp(other.u, repeat=True),
+                    self.v + self.warp(other.v, repeat=True))
+
+    def average(self, other, otherweight):
+        if otherweight == 0.0:
+            return self
+        if otherweight == 1.0:
+            return other
+        return Flow(self.u.shape,
+                    (other.u - self.u) * otherweight + self.u,
+                    (other.v - self.v) * otherweight + self.v)
+
+    def distortion(self):
+        return np.sum(np.abs(np.diff(self.u, axis=0))) + \
+            np.sum(np.abs(np.diff(self.u, axis=1))) + \
+            np.sum(np.abs(np.diff(self.v, axis=0))) + \
+            np.sum(np.abs(np.diff(self.v, axis=1)))
+
 def warp(im, flow):
-    ybase, xbase = np.mgrid[:im.shape[0], :im.shape[1]]
-    return cv2.remap(im,
-                     (xbase + flow.u).astype(np.float32),
-                     (ybase + flow.v).astype(np.float32),
-                     cv2.INTER_CUBIC,
-                     borderMode=cv2.BORDER_CONSTANT,
-                     borderValue=np.nan)
+    return flow.warp(im)
 
 def scalespace(im, octaves):
     sp = {}
@@ -201,7 +237,7 @@ if __name__ == "__main__":
     im1 = cv2.imread(sys.argv[1], flags=cv2.CV_LOAD_IMAGE_GRAYSCALE)
     im2 = cv2.imread(sys.argv[2], flags=cv2.CV_LOAD_IMAGE_GRAYSCALE)
 
-    if False:  # we're using cached images
+    if True:  # we're using cached images
         im1 = im1[3249:47465, 5099:34750]
         im2 = im2[3249:47465, 5099:34750]
 
@@ -247,6 +283,7 @@ if __name__ == "__main__":
                             previous_flow=flow,
                             alpha=alpha)
 
+    print "savine"
     flow.save(out)
 
 
