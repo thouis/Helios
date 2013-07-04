@@ -6,6 +6,7 @@ import fastremap
 import clahe
 import scipy.sparse as sparse
 import scipy.sparse.linalg as spspl
+from scipy.interpolate import griddata
 import h5py
 
 from cg import cg
@@ -156,7 +157,8 @@ psi_prime = phi_prime
 def compute_flow(im1, im2, previous_flow=None,
                  average_derivs=True,
                  flow_iters=10,
-                 alpha=1.0):
+                 alpha=1.0,
+                 constraints=None):
     # See Ce Liu's thesis, appendix A for notation
 
     assert im1.shape == im2.shape, "mismatch" + str(im1.shape)  + " " + str(im2.shape)
@@ -173,6 +175,7 @@ def compute_flow(im1, im2, previous_flow=None,
     else:
         cur_flow = Flow(im1.shape)
         I2 = im2
+
 
     # Average derivatives
     if average_derivs:
@@ -214,31 +217,88 @@ def compute_flow(im1, im2, previous_flow=None,
         LR = diag(Psi * (Iy ** 2)) + alpha * L
         A = s_vstack((s_hstack((UL, UR)),
                       s_hstack((LL, LR)))).tocsc()
-        di = A[range(A.shape[0]), range(A.shape[0])].A.ravel()
-        di[di == 0] = 1.0
-        preA = sparse.diags(1.0 / di, 0)
+
         bU = Psi * Ix * Iz + alpha * L * U
         bL = Psi * Iy * Iz + alpha * L * V
         b = - np.vstack((bU, bL))
 
-        x, st = cg(A, b, x0=prev_x, M=preA, tol=0.05 / np.linalg.norm(b))
-        print i, np.median(np.abs(x)), st
+        # preconditioner
+        di = A[range(A.shape[0]), range(A.shape[0])].A.ravel()
+        di[di == 0] = 1.0
+        preA = sparse.diags(1.0 / di, 0)
+
+        x, st = spspl.gmres(A, b, x0=prev_x, M=preA, tol=0.05, maxiter=10)
+        print i, "med change", np.median(np.abs(x)), "med change", np.median(np.abs(x - prev_x)) if prev_x is not None else ""
+        if prev_x is not None:
+            if np.max(np.abs(prev_x - x)) < 0.05:
+                break
         dU = x[:dU.shape[0]].reshape(dU.shape)
         dV = x[dU.shape[0]:].reshape(dU.shape)
         prev_x = x
-        if st <= 3 and i > 1:
-            break
     cur_flow.u += dU.reshape(cur_flow.u.shape)
     cur_flow.v += dV.reshape(cur_flow.v.shape)
+
+    if constraints is not None:
+        # correct for constraints
+        correction_u = np.zeros_like(cur_flow.u)
+        correction_v = np.zeros_like(cur_flow.v)
+        gi, gj = np.mgrid[0:cur_flow.u.shape[0], 0:cur_flow.u.shape[1]]
+        src_is = [src_i for src_i, src_j, dest_i, dest_j in constraints]
+        corner_is = [0, 0, cur_flow.u.shape[0], cur_flow.u.shape[0]]
+        src_js = [src_j for src_i, src_j, dest_i, dest_j in constraints]
+        corner_js = [0, cur_flow.u.shape[1], cur_flow.u.shape[1], 0]
+        u_fixes = np.array([(dest_j - src_j - cur_flow.u[int(src_i), int(src_j)]) 
+                            for src_i, src_j, dest_i, dest_j in constraints])
+        v_fixes = np.array([(dest_i - src_i - cur_flow.v[int(src_i), int(src_j)]) 
+                            for src_i, src_j, dest_i, dest_j in constraints])
+        corner_u_fixes = griddata((src_is, src_js), u_fixes, (corner_is, corner_js), method='nearest')
+        corner_v_fixes = griddata((src_is, src_js), v_fixes, (corner_is, corner_js), method='nearest')
+        src_is += corner_is
+        src_js += corner_js
+        u_fixes = np.hstack((u_fixes, corner_u_fixes))
+        v_fixes = np.hstack((v_fixes, corner_v_fixes))
+        cur_flow.u += griddata((src_is, src_js), u_fixes, (gi, gj), method='linear')
+        cur_flow.v += griddata((src_is, src_js), v_fixes, (gi, gj), method='linear')
     cur_flow.u = cv2.medianBlur(cur_flow.u, 5)
     cur_flow.v = cv2.medianBlur(cur_flow.v, 5)
     return cur_flow
 
-if __name__ == "__main__":
-    im1 = cv2.imread(sys.argv[1], flags=cv2.CV_LOAD_IMAGE_GRAYSCALE)
-    im2 = cv2.imread(sys.argv[2], flags=cv2.CV_LOAD_IMAGE_GRAYSCALE)
+def find_marks(im):
+    marks = {}
+    # marks are places with 255 in one channel and 0 in another
+    for r in [0, 255]:
+        for g in [0, 255]:
+            for b in [0, 255]:
+                if r == b == g:
+                    continue
+                mask = (im[:, :, 2] == r) & (im[:, :, 1] == g) & (im[:, :, 0] == b)
+                if np.any(mask):
+                    nzi, nzj = np.nonzero(mask)
+                    marks[(r, g, b)] = (np.mean(nzi), np.mean(nzj))
+    return marks
 
-    if True:  # we're using cached images
+def scale_constraints(marks1, marks2, octaves):
+    def gen():
+        sc = 0.5 ** octaves
+        for k in set(marks1.keys()) &  set(marks2.keys()):
+            i1, j1 = marks1[k]
+            i2, j2 = marks2[k]
+            yield(sc * i1, sc * j1, sc * i2, sc * j2)
+    return [c for c in gen()]
+
+if __name__ == "__main__":
+    im1 = cv2.imread(sys.argv[1])
+    im2 = cv2.imread(sys.argv[2])
+
+    # Find fiducial marks
+    marks_1 = find_marks(im1)
+    marks_2 = find_marks(im2)
+
+    # convert to grayscale
+    im1 = np.mean(im1, axis=2)
+    im2 = np.mean(im2, axis=2)
+
+    if False:  # we're using cached images
         im1 = im1[3249:47465, 5099:34750]
         im2 = im2[3249:47465, 5099:34750]
 
@@ -270,20 +330,29 @@ if __name__ == "__main__":
     im1 = im1.astype(np.float32) / 255
     im2 = im2.astype(np.float32) / 255
 
-    # keep about 32 pixels on the shortest side
-    octaves = max(0, int(np.log2(min(*im1.shape)) - 3))
+    # keep about 64 pixels on the shortest side
+    octaves = max(0, int(np.log2(min(*im1.shape)) - 4))
     print "Downsampling %d times to" % (octaves), "x".join(str(int(s * (0.5 ** octaves))) for s in im1.shape)
     pyramid1 = scalespace(im1, octaves)
     pyramid2 = scalespace(im2, octaves)
 
-    flow = compute_flow(pyramid1[octaves], pyramid2[octaves], alpha=3.0)
+    flow = compute_flow(pyramid1[octaves],
+                        pyramid2[octaves],
+                        alpha=3.0,
+                        constraints=scale_constraints(marks_1, marks_2, octaves))
+
     for o in range(octaves):
         alpha = 5.0 + o * 20.0 / (octaves - 1)
         print "OCTAVE", octaves - o - 1, octaves
+        constraints = scale_constraints(marks_1, marks_2, octaves - o - 1)
+        if octaves - o < 5:
+            print "no corrections"
+            constraints = None
         flow = compute_flow(pyramid1[octaves - o - 1],
                             pyramid2[octaves - o - 1],
                             previous_flow=flow,
-                            alpha=alpha)
+                            alpha=alpha,
+                            constraints=constraints)
 
     print "savine"
     flow.save(out)
