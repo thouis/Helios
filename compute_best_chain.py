@@ -1,7 +1,9 @@
 from helios import Flow
+import cv2
 import numpy as np
 import pylab
 import os
+import sys
 
 flocache = {}
 
@@ -26,8 +28,14 @@ def generate_chains(a, b, maxstep, dir):
                 for c in generate_chains(b - s * dir, b, maxstep, dir):
                     yield (a,) + c
 
+def image_diff(flo, a, b):
+    flo = flo.resize(a.shape)
+    return np.sum(np.abs(a - flo.warp(b)))
+
 def best_flow(a, b, dir=1):
     ''' best a to b'''
+    ima = cv2.imread(sys.argv[a], flags=cv2.CV_LOAD_IMAGE_GRAYSCALE)
+    imb = cv2.imread(sys.argv[b], flags=cv2.CV_LOAD_IMAGE_GRAYSCALE)
     def best_of(*choices):
         def load_chain(c):
             if (((dir == 1) and (c[1] <= c[0])) or
@@ -42,7 +50,7 @@ def best_flow(a, b, dir=1):
 
         flocache.clear()
         flows = [load_chain(list(c)) for c in choices]
-        fdc = [(f.distortion(), f, c) for (f, c) in zip(flows, choices) if f is not None]
+        fdc = [(image_diff(f, ima, imb), f, c) for (f, c) in zip(flows, choices) if f is not None]
         fdc.sort()
         best = fdc[0]
         return best[1], best[2]
