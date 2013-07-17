@@ -2,6 +2,7 @@ import sys
 
 import numpy as np
 import cv2
+import skimage.morphology as skm
 import fastremap
 import clahe
 import scipy.sparse as sparse
@@ -185,7 +186,7 @@ def compute_flow(im1, im2, previous_flow=None,
 
     # temporal derivative
     Iz = I2 - im1
-    print "Median Abs error", np.median(np.abs(Iz))
+    print "Median Abs error", np.median(np.abs(Iz[np.isfinite(Iz)]))
 
     # mask nonoverlapping areas
     Iz[np.isnan(Iz)] = 0
@@ -284,7 +285,8 @@ def scale_constraints(marks1, marks2, octaves):
             i1, j1 = marks1[k]
             i2, j2 = marks2[k]
             yield(sc * i1, sc * j1, sc * i2, sc * j2)
-    return [c for c in gen()]
+    temp = [c for c in gen()]
+    return temp if len(temp) else None
 
 if __name__ == "__main__":
     im1 = cv2.imread(sys.argv[1])
@@ -295,43 +297,23 @@ if __name__ == "__main__":
     marks_2 = find_marks(im2)
 
     # convert to grayscale
-    im1 = np.mean(im1, axis=2)
-    im2 = np.mean(im2, axis=2)
-
-    if False:  # we're using cached images
-        im1 = im1[3249:47465, 5099:34750]
-        im2 = im2[3249:47465, 5099:34750]
-
-        scaledown = 16
-        im1 = cv2.resize(im1, (im1.shape[1] // scaledown, im1.shape[0] // scaledown))
-        im2 = cv2.resize(im2, (im2.shape[1] // scaledown, im2.shape[0] // scaledown))
-
-        # reduce noise
-        for i in range(2):
-            im1 = cv2.medianBlur(im1, 3)
-            im2 = cv2.medianBlur(im2, 3)
-
-        # equalize histogram
-        clahe.clahe(im1, im1, 1.5)
-        clahe.clahe(im2, im2, 1.5)
-
-        def halfstep(im):
-            im = cv2.GaussianBlur(im, (0, 0), sigmaX=1.0)
-            im = cv2.resize(im, (im.shape[1] // 2, im.shape[0] // 2))
-            return im
-
-        im1 = halfstep(im1)
-        im2 = halfstep(im2)
+    im1 = np.mean(im1, axis=2).astype(np.uint8)
+    im2 = np.mean(im2, axis=2).astype(np.uint8)
 
     print "Size", im1.shape, im2.shape
+
 
     out = sys.argv[3]
 
     im1 = im1.astype(np.float32) / 255
     im2 = im2.astype(np.float32) / 255
 
-    # keep about 64 pixels on the shortest side
-    octaves = max(0, int(np.log2(min(*im1.shape)) - 4))
+    l1 = skm.label(im1 == 0)
+    im1[l1 == l1[0, 0]] = np.nan
+    l2 = skm.label(im2 == 0)
+    im2[l2 == l2[0, 0]] = np.nan
+
+    octaves = 2
     print "Downsampling %d times to" % (octaves), "x".join(str(int(s * (0.5 ** octaves))) for s in im1.shape)
     pyramid1 = scalespace(im1, octaves)
     pyramid2 = scalespace(im2, octaves)
@@ -354,7 +336,7 @@ if __name__ == "__main__":
                             alpha=alpha,
                             constraints=constraints)
 
-    print "savine"
+    print "saving"
     flow.save(out)
 
 
