@@ -2,7 +2,6 @@ import sys
 import cv2
 from helios import Flow
 
-flo = Flow.load(sys.argv[3])
 im1 = cv2.imread(sys.argv[1])
 im2 = cv2.imread(sys.argv[2])
 flo = Flow.load(sys.argv[3])

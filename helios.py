@@ -68,6 +68,15 @@ class Flow(object):
                          borderMode=cv2.BORDER_CONSTANT,
                          borderValue=np.nan)
 
+    def fastwarp(self, im, outshape):
+        scaleu = 1.0 / (self.u.shape[1] - 1)
+        scalev = 1.0 / (self.v.shape[0] - 1)
+        out = np.zeros(outshape, im.dtype)
+        fastremap.remap(im, out,
+                        np.eye(2, dtype=np.double), np.zeros((2, 1), dtype=np.double),
+                        self.v * scalev, self.u * scaleu, False)
+        return out
+
     def chain(self, other):
         return Flow(self.u.shape,
                     self.u + self.warp(other.u, repeat=True),
